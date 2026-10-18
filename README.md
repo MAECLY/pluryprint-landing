@@ -94,7 +94,8 @@ MAECLY/pluryprint:
 PLURYPRINT_APP_DIR=../pluryprint python3 -I -m unittest discover -s tests -v
 ```
 
-CI checks out the app's `src/i18n` for it.
+CI checks out the app's `src/i18n` for it, and there the test fails instead
+of skipping if the variable is missing.
 
 ## License
 

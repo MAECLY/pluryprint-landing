@@ -72,6 +72,10 @@ class SiteSources(unittest.TestCase):
         # The dialog's wording lives in the app repository.
         app = os.environ.get("PLURYPRINT_APP_DIR", "").strip()
         if not app:
+            # CI checks out the app for this, so there a missing variable is a
+            # broken workflow, not a reason to skip.
+            if os.environ.get("GITHUB_ACTIONS") == "true":
+                self.fail("PLURYPRINT_APP_DIR is not set in CI")
             self.skipTest(
                 "PLURYPRINT_APP_DIR is not set: point it at a checkout of"
                 " MAECLY/pluryprint to compare with the app's install dialog"
