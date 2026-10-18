@@ -91,12 +91,14 @@ def fetch_release() -> bytes:
         "User-Agent": USER_AGENT,
     }
     secret = token()
-    if secret:
-        headers["Authorization"] = f"Bearer {secret}"
 
     attempts = len(RETRY_DELAYS) + 1
     for attempt in range(1, attempts + 1):
         request = urllib.request.Request(API, headers=headers, method="GET")
+        if secret:
+            # Unredirected: urllib copies ordinary headers to wherever a
+            # redirect points, and the token is only for api.github.com.
+            request.add_unredirected_header("Authorization", f"Bearer {secret}")
         try:
             with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
                 return response.read()
@@ -126,9 +128,11 @@ def build(release_json: Path | None, out: Path) -> int:
         if release_json is None:
             body = fetch_release()
             try:
-                json.loads(body)
+                parsed = json.loads(body)
             except ValueError as e:
                 raise BuildError(f"GET {API} sent no JSON: {e}") from None
+            if not isinstance(parsed, dict):
+                raise BuildError(f"GET {API} sent no JSON object")
             release_json = Path(tmp) / "release.json"
             release_json.write_bytes(body)
 
@@ -137,17 +141,20 @@ def build(release_json: Path | None, out: Path) -> int:
         if out.resolve() == DIST.resolve() and out.exists():
             shutil.rmtree(out)
 
-        code = apply_release.main([
-            "--release-json", str(release_json),
-            "--repo", REPO,
-            "--site", str(SITE),
-            "--out", str(out),
-        ])
+        code = None  # stays None if apply_release.py crashes
+        try:
+            code = apply_release.main([
+                "--release-json", str(release_json),
+                "--repo", REPO,
+                "--site", str(SITE),
+                "--out", str(out),
+            ])
+        finally:
+            # Half a build is no build: do not leave it where a preview would
+            # serve it, whether the script refused or crashed.
+            if code != 0 and out.resolve() == DIST.resolve() and out.exists():
+                shutil.rmtree(out)
     if code != 0:
-        # Half a build is no build: do not leave it where a preview would
-        # serve it.
-        if out.resolve() == DIST.resolve() and out.exists():
-            shutil.rmtree(out)
         raise BuildError(f"apply_release.py refused the release (exit {code})")
     return 0
 

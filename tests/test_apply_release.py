@@ -136,6 +136,18 @@ class RefusesARelease(Workdir):
             with self.subTest(why):
                 self.refused(mutate, why)
 
+    def test_apply_release_refuses_a_release_that_is_not_an_object(self):
+        # An array or null fails with a message, not a traceback.
+        for release in [[], None]:
+            with self.subTest(release=release):
+                proc, out = self.apply(release)
+                self.assertNotEqual(proc.returncode, 0)
+                self.assertTrue(
+                    proc.stderr.startswith("apply_release: "), proc.stderr
+                )
+                self.assertIn("not an object", proc.stderr)
+                self.assertFalse(out.exists())
+
 
 class RefusesMarkers(Workdir):
     """A marker the script does not know, a malformed one, or a missing

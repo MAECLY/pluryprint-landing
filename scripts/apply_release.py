@@ -89,6 +89,11 @@ def values(release: dict, repo: str) -> dict[str, str]:
     """Every marker's value, after checking the release is one to link."""
     if not REPO.match(repo):
         raise ReleaseError(f"not an OWNER/NAME repository: {repo!r}")
+    # The API sends an object. Anything else (an array, null) is refused here
+    # with a message instead of failing further down with a traceback.
+    if not isinstance(release, dict):
+        kind = type(release).__name__
+        raise ReleaseError(f"the release is a JSON {kind}, not an object")
     if release.get("draft") or release.get("prerelease"):
         raise ReleaseError("the release is a draft or a pre-release")
     tag = release.get("tag_name")

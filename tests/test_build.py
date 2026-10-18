@@ -208,10 +208,13 @@ class Build(unittest.TestCase):
                 ) as urlopen:
                     code, stdout, stderr = self.main("--out", str(self.tmp / name))
                 self.assertNotEqual(code, 0)
-                headers = {
-                    k.lower(): v for k, v in urlopen.call_args[0][0].header_items()
-                }
+                request = urlopen.call_args[0][0]
+                headers = {k.lower(): v for k, v in request.header_items()}
                 self.assertEqual(headers["authorization"], f"Bearer {SECRET}")
+                # Not copied to wherever a redirect would point.
+                self.assertNotIn(
+                    "authorization", {k.lower() for k in request.headers}
+                )
                 self.assertNotIn(SECRET, stdout + stderr)
 
     def test_build_fails_on_http_errors(self):
@@ -264,6 +267,41 @@ class Build(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertIn("no JSON", stderr)
 
+    def test_build_fails_on_json_that_is_not_a_release_object(self):
+        for body in [b"[]", b"null"]:
+            with self.subTest(body=body):
+                dist = self.tmp / "dist"
+                self.build.DIST = dist
+                with mock.patch(
+                    "urllib.request.urlopen", return_value=FakeResponse(body)
+                ):
+                    code, _, stderr = self.main()
+                self.assertNotEqual(code, 0)
+                self.assertIn("no JSON object", stderr)
+                self.assertNotIn("Traceback", stderr)
+                self.assertFalse(dist.exists())
+
+    def test_build_removes_dist_when_apply_release_crashes(self):
+        dist = self.tmp / "dist"
+        self.build.DIST = dist
+        real = self.build.load_apply_release
+
+        def crashing():
+            module = real()
+            original = module.apply
+
+            def apply(release, repo, site, out):
+                original(release, repo, site, out)
+                raise RuntimeError("crash after filling")
+
+            module.apply = apply
+            return module
+
+        self.build.load_apply_release = crashing
+        with self.assertRaises(RuntimeError):
+            self.main("--release-json", str(self.release_file(fixture())))
+        self.assertFalse(dist.exists())
+
     def test_build_runs_from_any_folder(self):
         # Paths come from the script's location, not the current folder.
         out = self.tmp / "dist"
@@ -277,7 +315,6 @@ class Build(unittest.TestCase):
             os.chdir(cwd)
         self.assertEqual(code, 0, stderr)
         self.assert_filled(out)
-
 
 
 class Ci(unittest.TestCase):
