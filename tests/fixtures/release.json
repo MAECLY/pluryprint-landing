@@ -1,0 +1,52 @@
+{
+  "tag_name": "v9.8.7",
+  "name": "Pluryprint v9.8.7",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2027-03-05T23:59:00Z",
+  "html_url": "https://github.com/MAECLY/pluryprint/releases/tag/v9.8.7",
+  "assets": [
+    {
+      "name": "Pluryprint_9.8.7_windows_x64.exe",
+      "state": "uploaded",
+      "size": 10545760,
+      "browser_download_url": "https://github.com/MAECLY/pluryprint/releases/download/v9.8.7/Pluryprint_9.8.7_windows_x64.exe"
+    },
+    {
+      "name": "Pluryprint_9.8.7_windows_arm64.exe",
+      "state": "uploaded",
+      "size": 11594336,
+      "browser_download_url": "https://github.com/MAECLY/pluryprint/releases/download/v9.8.7/Pluryprint_9.8.7_windows_arm64.exe"
+    },
+    {
+      "name": "Pluryprint_9.8.7_apple_silicon.dmg",
+      "state": "uploaded",
+      "size": 12642912,
+      "browser_download_url": "https://github.com/MAECLY/pluryprint/releases/download/v9.8.7/Pluryprint_9.8.7_apple_silicon.dmg"
+    },
+    {
+      "name": "Pluryprint_9.8.7_apple_intel.dmg",
+      "state": "uploaded",
+      "size": 13691488,
+      "browser_download_url": "https://github.com/MAECLY/pluryprint/releases/download/v9.8.7/Pluryprint_9.8.7_apple_intel.dmg"
+    },
+    {
+      "name": "SHA256SUMS",
+      "state": "uploaded",
+      "size": 1000,
+      "browser_download_url": "https://github.com/MAECLY/pluryprint/releases/download/v9.8.7/SHA256SUMS"
+    },
+    {
+      "name": "latest.json",
+      "state": "uploaded",
+      "size": 1000,
+      "browser_download_url": "https://github.com/MAECLY/pluryprint/releases/download/v9.8.7/latest.json"
+    },
+    {
+      "name": "Pluryprint_9.8.7_windows_x64.exe.sig",
+      "state": "uploaded",
+      "size": 1000,
+      "browser_download_url": "https://github.com/MAECLY/pluryprint/releases/download/v9.8.7/Pluryprint_9.8.7_windows_x64.exe.sig"
+    }
+  ]
+}

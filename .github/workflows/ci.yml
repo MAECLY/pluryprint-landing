@@ -1,0 +1,55 @@
+name: CI
+
+# Checks the landing on every pull request and every push to main. Vercel
+# builds and deploys on its own (main to production, pull requests to
+# previews); this workflow only makes sure the build would fill site/ the
+# way the tests expect, without touching the network or the live site.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Nothing by default; the job asks for what it needs.
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests and offline build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checks out this repository and the app's copy
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The app's interface copy, which site/llms.txt has to agree with.
+      # Only src/i18n is checked out.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: MAECLY/pluryprint
+          path: .app
+          sparse-checkout: src/i18n
+          persist-credentials: false
+
+      # The runner's own python3: the scripts are standard library only.
+      - name: Run the tests
+        env:
+          PLURYPRINT_APP_DIR: ${{ github.workspace }}/.app
+        run: python3 -I -m unittest discover -s tests -v
+
+      # The build Vercel runs, from the test fixture instead of the API. A
+      # marker left in any generated text file fails the job.
+      - name: Build offline
+        run: |
+          python3 -I scripts/build.py --release-json tests/fixtures/release.json
+          test -f dist/index.html
+          if grep -rl --include='*.html' --include='*.txt' --include='*.xml' \
+              --include='*.json' --include='*.webmanifest' '{{' dist; then
+            echo "dist/ keeps a {{release.*}} marker" >&2
+            exit 1
+          fi
