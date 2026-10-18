@@ -1,0 +1,3 @@
+dist/
+.vercel/
+__pycache__/

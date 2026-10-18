@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Fill the landing page in site/ with the published release.
 
-Used by .github/workflows/pages.yml, so the landing follows every release on
-its own: nothing in site/ names a version, a date, a download link or a file
-size. Those places carry markers instead, and this script copies site/ to an
-output folder with every marker replaced from the release's GitHub API record
-(GET /repos/<repo>/releases/latest). The generated folder is what Pages
-publishes; it is never committed.
+Run by scripts/build.py, the Vercel build command, so the landing follows
+every release of the app on its own: nothing in site/ names a version, a
+date, a download link or a file size. Those places carry markers instead, and
+this script copies site/ to an output folder with every marker replaced from
+the release's GitHub API record (GET /repos/<repo>/releases/latest). The
+generated folder, dist/, is what Vercel serves; it is never committed.
 
-Plain standard-library Python, so the runner needs nothing installed, and
-src-tauri/tests/site_release.rs runs it against a fixture.
+Plain standard-library Python (3.9 or later), so the build needs nothing
+installed, and the tests in tests/ run it against a fixture.
 
   apply_release.py --release-json F --repo OWNER/NAME --site DIR --out DIR
 
@@ -26,12 +26,13 @@ Markers (in any .html, .txt, .webmanifest, .xml or .json file):
   {{release.<file>.mib_en}}     its size in MiB, one decimal: 17.3
   {{release.<file>.mib_es}}     the same with a decimal comma: 17,3
 
-It fails, and so the deploy fails, when the release is a draft or a
-pre-release, its tag is not v<SemVer>, any of the four installers or
-SHA256SUMS is missing, empty or not where the landing would link it, a marker
-is unknown or left over, a download marker is used nowhere, or a JSON file or
-JSON-LD block no longer parses. There is no flag to skip any of that: the
-landing never links a file that is not there.
+It fails, and so the Vercel build fails and the live site keeps its previous
+deployment, when the release is a draft or a pre-release, its tag is not
+v<SemVer>, any of the four installers or SHA256SUMS is missing, empty or not
+where the landing would link it, a marker is unknown or left over, a download
+marker is used nowhere, or a JSON file or JSON-LD block no longer parses.
+There is no flag to skip any of that: the landing never links a file that is
+not there.
 """
 
 from __future__ import annotations
