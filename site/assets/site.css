@@ -34,7 +34,7 @@
 
 :root {
   color-scheme: light;
-  /* Abanico icon palette (src-tauri/icons/source/macos.svg) */
+  /* Abanico icon palette (src-tauri/icons/source/macos.svg in MAECLY/pluryprint) */
   --tile-a: #fff7ed;
   --tile-b: #fed7aa;
   --ink: #1c1917;
