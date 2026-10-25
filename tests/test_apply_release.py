@@ -184,6 +184,93 @@ class RefusesMarkers(Workdir):
         self.assertNotEqual(bad_ld.returncode, 0)
         self.assertIn("valid JSON", bad_ld.stderr)
 
+    def test_apply_release_refuses_metric_markers_it_could_not_hide(self):
+        all_links = "".join(f"{{{{release.{l}.url}}}}\n" for l, _ in LABELS)
+        metrics = self.tmp / "metrics.json"
+        metrics.write_text(json.dumps({"downloads": 5, "stars": 2}), encoding="utf-8")
+
+        def run(body: str, n: int):
+            site = self.tmp / f"msite{n}"
+            site.mkdir()
+            (site / "index.html").write_text(all_links + body, encoding="utf-8")
+            out = self.tmp / f"mout{n}"
+            proc = run_apply_release(
+                self.tmp / "release.json", site, out, "--metrics-json", str(metrics)
+            )
+            return proc, out
+
+        (self.tmp / "release.json").write_text(json.dumps(fixture()), encoding="utf-8")
+        ok, out = run(
+            "{{#metric.downloads}}[{{metric.downloads_es}}|{{metric.downloads_en}}"
+            "|{{metric.downloads}}]{{/metric.downloads}}"
+            "{{#metric.stars}}({{metric.stars_en}}){{/metric.stars}}",
+            0,
+        )
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertIn(
+            "[5 descargas|5 downloads|5](2 stars)",
+            (out / "index.html").read_text(encoding="utf-8"),
+        )
+        for n, (body, why) in enumerate([
+            ("{{metric.downloads_es}}", "outside its block"),
+            ("{{#metric.downloads}}{{metric.stars_es}}{{/metric.downloads}}", "inside the"),
+            ("{{#metric.downloads}}{{metric.downloads_es}}", "left open"),
+            ("{{#metric.views}}x{{/metric.views}}", "unknown metric"),
+            ("{{#metric.downloads}}{{metric.downloads_fr}}{{/metric.downloads}}", "inside the"),
+        ], start=1):
+            with self.subTest(body):
+                proc, _ = run(body, n)
+                self.assertNotEqual(proc.returncode, 0, body)
+                self.assertIn(why, proc.stderr)
+
+
+class Metrics(Workdir):
+    """--metrics-json shows a metric only when it is a count above zero."""
+
+    def page(self, metrics) -> tuple[str, str]:
+        path = self.tmp / "metrics.json"
+        path.write_text(json.dumps(metrics), encoding="utf-8")
+        release_json = self.tmp / "release.json"
+        release_json.write_text(json.dumps(fixture()), encoding="utf-8")
+        out = self.tmp / f"out{len(list(self.tmp.iterdir()))}"
+        proc = run_apply_release(
+            release_json, ROOT / "site", out, "--metrics-json", str(path)
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return (
+            (out / "index.html").read_text(encoding="utf-8"),
+            (out / "en/index.html").read_text(encoding="utf-8"),
+        )
+
+    def test_metrics_are_shown_in_each_language(self):
+        es, en = self.page({"downloads": 1234567, "stars": 1})
+        self.assertIn("1.234.567 descargas en total", es)
+        self.assertIn("1,234,567 downloads in total", en)
+        self.assertIn("con 1 estrella.", es)
+        self.assertIn("with 1 star.", en)
+        es, en = self.page({"downloads": 1, "stars": 2})
+        self.assertIn(">1 descarga en total<", es)
+        self.assertIn(">1 download in total<", en)
+
+    def test_unknown_or_zero_metrics_are_not_shown(self):
+        for metrics in [
+            {},
+            {"downloads": None, "stars": None},
+            {"downloads": 0, "stars": 0},
+            {"downloads": -4, "stars": "12"},
+            {"downloads": True, "stars": 1.5},
+        ]:
+            with self.subTest(metrics):
+                for page in self.page(metrics):
+                    self.assertNotIn("in total", page)
+                    self.assertNotIn("en total", page)
+                    self.assertNotIn("estrella", page)
+                    self.assertNotIn(" stars.", page)
+                    self.assertNotIn(" star.", page)
+                    self.assertIn(">GitHub</a>.</p>", page)
+                    self.assertNotIn("interactionStatistic", page)
+                    self.assertNotIn("{{", page)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -40,6 +40,50 @@ def http_error(code: int, reason: str) -> urllib.error.HTTPError:
     )
 
 
+API_ROOT = "https://api.github.com/repos/MAECLY/pluryprint"
+
+
+def releases_page(downloads: list[int]) -> list[dict]:
+    """A page of releases whose assets were downloaded these many times."""
+    return [
+        {"tag_name": f"v0.0.{i}", "assets": [{"download_count": n}]}
+        for i, n in enumerate(downloads)
+    ]
+
+
+class FakeApi:
+    """urlopen for the three API calls the build makes, routed by URL.
+
+    pages: the bodies of /releases?page=1, 2...; repo: /repos/OWNER/NAME.
+    Each can be an exception to raise instead. Every request is kept.
+    """
+
+    def __init__(self, pages=None, repo=None, latest=None):
+        self.latest = fixture() if latest is None else latest
+        self.pages = [releases_page([40, 27])] if pages is None else pages
+        self.repo = {"stargazers_count": 0} if repo is None else repo
+        self.requests = []
+
+    def __call__(self, request, timeout=None):
+        self.requests.append(request)
+        url = request.full_url
+        if url == f"{API_ROOT}/releases/latest":
+            body = self.latest
+        elif url.startswith(f"{API_ROOT}/releases?"):
+            page = int(url.rsplit("page=", 1)[1])
+            body = self.pages[page - 1] if page <= len(self.pages) else []
+        elif url == API_ROOT:
+            body = self.repo
+        else:
+            raise AssertionError(f"unexpected request {url}")
+        if isinstance(body, Exception):
+            raise body
+        return FakeResponse(body if isinstance(body, bytes) else json.dumps(body).encode())
+
+    def urls(self) -> list[str]:
+        return [r.full_url for r in self.requests]
+
+
 class VercelConfig(unittest.TestCase):
     def test_vercel_json_builds_the_landing_with_build_py(self):
         config = json.loads(read("vercel.json"))
@@ -98,7 +142,7 @@ class VercelConfig(unittest.TestCase):
         self.assertNotIn(";", json.loads(sources["vercel.json"])["buildCommand"])
 
 
-class Build(unittest.TestCase):
+class BuildCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
@@ -137,6 +181,8 @@ class Build(unittest.TestCase):
         for name in ["CNAME", ".nojekyll", "vercel.json", "scripts", "tests"]:
             self.assertFalse((out / name).exists(), name)
 
+
+class Build(BuildCase):
     def test_build_fills_dist_from_a_release_file(self):
         out = self.tmp / "dist"
         code, stdout, stderr = self.main(
@@ -190,7 +236,7 @@ class Build(unittest.TestCase):
             code, _, stderr = self.main("--out", str(out))
         self.assertEqual(code, 0, stderr)
         self.assert_filled(out)
-        request = urlopen.call_args[0][0]
+        request = urlopen.call_args_list[0][0][0]
         self.assertEqual(request.full_url, self.build.API)
         self.assertEqual(request.get_method(), "GET")
         headers = {k.lower(): v for k, v in request.header_items()}
@@ -240,13 +286,19 @@ class Build(unittest.TestCase):
     def test_build_retries_a_network_error_then_succeeds(self):
         body = json.dumps(fixture()).encode()
         out = self.tmp / "dist"
-        with mock.patch(
-            "urllib.request.urlopen",
-            side_effect=[urllib.error.URLError("connection reset"), FakeResponse(body)],
-        ) as urlopen:
+        api = FakeApi()
+        responses = [urllib.error.URLError("connection reset")]
+
+        def flaky(request, timeout=None):
+            if responses:
+                raise responses.pop()
+            return api(request, timeout)
+
+        with mock.patch("urllib.request.urlopen", side_effect=flaky) as urlopen:
             code, _, stderr = self.main("--out", str(out))
         self.assertEqual(code, 0, stderr)
-        self.assertEqual(urlopen.call_count, 2)
+        # The failed try and the retry of the release, then the two metrics.
+        self.assertEqual(urlopen.call_count, 4)
         self.assertIn("retrying", stderr)
         self.assert_filled(out)
 
@@ -290,8 +342,8 @@ class Build(unittest.TestCase):
             module = real()
             original = module.apply
 
-            def apply(release, repo, site, out):
-                original(release, repo, site, out)
+            def apply(*args):
+                original(*args)
                 raise RuntimeError("crash after filling")
 
             module.apply = apply
@@ -315,6 +367,161 @@ class Build(unittest.TestCase):
             os.chdir(cwd)
         self.assertEqual(code, 0, stderr)
         self.assert_filled(out)
+
+
+class Metrics(BuildCase):
+    """The public metrics: shown only when the API gives a count above zero,
+    never failing the build and never shown as a guess or a zero."""
+
+    def built(self, api: FakeApi):
+        out = self.tmp / f"dist{len(list(self.tmp.iterdir()))}"
+        with mock.patch("urllib.request.urlopen", side_effect=api):
+            code, stdout, stderr = self.main("--out", str(out))
+        self.assertEqual(code, 0, stderr)
+        self.assert_filled(out)
+        es = (out / "index.html").read_text(encoding="utf-8")
+        en = (out / "en/index.html").read_text(encoding="utf-8")
+        return es, en, stdout, stderr
+
+    @staticmethod
+    def software(page: str) -> dict:
+        ld = page.split('<script type="application/ld+json">', 1)[1]
+        ld = json.loads(ld.split("</script>", 1)[0])
+        return next(n for n in ld["@graph"] if n["@type"] == "SoftwareApplication")
+
+    def assert_no_metrics(self, es: str, en: str):
+        for page in [es, en]:
+            self.assertNotIn("descarga", page.split("dl-links", 1)[1].split("</p>", 1)[0])
+            self.assertNotIn(" in total", page)
+            self.assertNotIn(" en total", page)
+            self.assertNotIn("estrella", page)
+            self.assertNotIn(" stars", page)
+            self.assertNotIn("interactionStatistic", page)
+            self.assertNotIn("metric", page)
+        self.assertIn('>GitHub</a>.</p>', es)
+        self.assertIn('>GitHub</a>.</p>', en)
+
+    def test_build_shows_downloads_summed_over_every_release_and_page(self):
+        api = FakeApi(
+            pages=[releases_page([1000] * 99 + [200]), releases_page([30, 4])],
+            repo={"stargazers_count": 0},
+        )
+        es, en, stdout, _ = self.built(api)
+        self.assertIn(f"{self.build.RELEASES_API}?per_page=100&page=2", api.urls())
+        self.assertIn(f"{self.build.RELEASES_API}?per_page=100&page=1", api.urls())
+        # 99 * 1000 + 200 + 30 + 4, in each language's own way.
+        self.assertIn(
+            'Todas las versiones</a> · <span class="nobreak">99.234 descargas en total</span></p>',
+            es,
+        )
+        self.assertIn(
+            'All releases</a> · <span class="nobreak">99,234 downloads in total</span></p>',
+            en,
+        )
+        for page in [es, en]:
+            stat = self.software(page)["interactionStatistic"]
+            self.assertEqual(stat["interactionType"], "https://schema.org/DownloadAction")
+            self.assertEqual(stat["userInteractionCount"], 99234)
+        # Zero stars: no star count anywhere.
+        self.assertNotIn("estrella", es)
+        self.assertNotIn(" stars", en)
+        self.assertIn("downloads: 99234", stdout)
+
+    def test_build_shows_stars_next_to_the_source_link(self):
+        es, en, _, _ = self.built(FakeApi(repo={"stargazers_count": 1}))
+        self.assertIn('>GitHub</a>, con 1 estrella.</p>', es)
+        self.assertIn('>GitHub</a>, with 1 star.</p>', en)
+        es, en, _, _ = self.built(FakeApi(repo={"stargazers_count": 1234}))
+        self.assertIn('>GitHub</a>, con 1.234 estrellas.</p>', es)
+        self.assertIn('>GitHub</a>, with 1,234 stars.</p>', en)
+        self.assertIn("67 descargas en total", es)
+        self.assertIn("67 downloads in total", en)
+
+    def test_build_shows_no_metric_that_is_zero(self):
+        es, en, _, _ = self.built(
+            FakeApi(pages=[releases_page([0, 0])], repo={"stargazers_count": 0})
+        )
+        self.assert_no_metrics(es, en)
+        es, en, _, _ = self.built(FakeApi(pages=[[]]))
+        self.assert_no_metrics(es, en)
+
+    def test_build_shows_no_metric_the_api_does_not_give(self):
+        for why, api in [
+            ("rate limited", FakeApi(
+                pages=[http_error(403, "rate limit exceeded")],
+                repo=http_error(403, "rate limit exceeded"),
+            )),
+            ("server error", FakeApi(
+                pages=[http_error(502, "Bad Gateway")], repo=http_error(502, "Bad Gateway")
+            )),
+            ("network down", FakeApi(
+                pages=[urllib.error.URLError("no route")],
+                repo=urllib.error.URLError("no route"),
+            )),
+            ("not JSON", FakeApi(pages=[b"<html>"], repo=b"<html>")),
+            ("wrong shape", FakeApi(pages=[{"message": "?"}], repo=[])),
+            ("bad counts", FakeApi(
+                pages=[[{"assets": [{"download_count": "67"}]}]],
+                repo={"stargazers_count": None},
+            )),
+            ("negative", FakeApi(
+                pages=[[{"assets": [{"download_count": -1}]}]],
+                repo={"stargazers_count": -3},
+            )),
+        ]:
+            with self.subTest(why):
+                es, en, _, stderr = self.built(api)
+                self.assert_no_metrics(es, en)
+                self.assertIn("downloads unknown, the page shows none", stderr)
+                self.assertIn("stars unknown, the page shows none", stderr)
+
+    def test_a_later_page_failing_shows_no_partial_total(self):
+        api = FakeApi(
+            pages=[releases_page([1] * 100), http_error(500, "Server Error")],
+            repo={"stargazers_count": 5},
+        )
+        es, en, _, stderr = self.built(api)
+        self.assertNotIn("descargas en total", es)
+        self.assertNotIn("downloads in total", en)
+        self.assertIn("5 estrellas", es)
+        self.assertIn("downloads unknown", stderr)
+
+    def test_metrics_send_the_token_too(self):
+        api = FakeApi()
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": SECRET}):
+            _, _, stdout, stderr = self.built(api)
+        self.assertEqual(len(api.requests), 3)
+        for request in api.requests:
+            headers = {k.lower(): v for k, v in request.header_items()}
+            self.assertEqual(headers["authorization"], f"Bearer {SECRET}")
+            self.assertNotIn("authorization", {k.lower() for k in request.headers})
+        self.assertNotIn(SECRET, stdout + stderr)
+
+    def test_an_offline_build_asks_for_no_metric(self):
+        out = self.tmp / "dist"
+        with mock.patch("urllib.request.urlopen") as urlopen:
+            code, _, stderr = self.main(
+                "--release-json", str(self.release_file(fixture())), "--out", str(out)
+            )
+        self.assertEqual(code, 0, stderr)
+        urlopen.assert_not_called()
+        self.assert_no_metrics(
+            (out / "index.html").read_text(encoding="utf-8"),
+            (out / "en/index.html").read_text(encoding="utf-8"),
+        )
+
+    def test_an_offline_build_shows_metrics_from_a_file(self):
+        metrics = self.tmp / "metrics.json"
+        metrics.write_text(json.dumps({"downloads": 208, "stars": 0}), encoding="utf-8")
+        out = self.tmp / "dist"
+        code, _, stderr = self.main(
+            "--release-json", str(self.release_file(fixture())),
+            "--metrics-json", str(metrics),
+            "--out", str(out),
+        )
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("208 descargas en total", (out / "index.html").read_text(encoding="utf-8"))
+        self.assertIn("208 downloads in total", (out / "en/index.html").read_text(encoding="utf-8"))
 
 
 class Ci(unittest.TestCase):

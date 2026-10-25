@@ -62,7 +62,7 @@ def fixture() -> dict:
     return copy.deepcopy(json.loads(FIXTURE.read_text(encoding="utf-8")))
 
 
-def run_apply_release(release_json: Path, site: Path, out: Path):
+def run_apply_release(release_json: Path, site: Path, out: Path, *extra: str):
     """Runs apply_release.py as the build would, with this interpreter."""
     return subprocess.run(
         [
@@ -77,6 +77,7 @@ def run_apply_release(release_json: Path, site: Path, out: Path):
             str(site),
             "--out",
             str(out),
+            *extra,
         ],
         capture_output=True,
         text=True,

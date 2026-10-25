@@ -12,6 +12,7 @@ Plain standard-library Python (3.9 or later), so the build needs nothing
 installed, and the tests in tests/ run it against a fixture.
 
   apply_release.py --release-json F --repo OWNER/NAME --site DIR --out DIR
+                   [--metrics-json F]
 
 Markers (in any .html, .txt, .webmanifest, .xml or .json file):
 
@@ -33,6 +34,28 @@ where the landing would link it, a marker is unknown or left over, a download
 marker is used nowhere, or a JSON file or JSON-LD block no longer parses.
 There is no flag to skip any of that: the landing never links a file that is
 not there.
+
+Public metrics (--metrics-json, written by build.py from the GitHub API) are
+the other way round: optional, and shown only when known. A metric's text
+sits inside its own block,
+
+  {{#metric.downloads}} · {{metric.downloads_es}} en total{{/metric.downloads}}
+
+and the block is kept, with its markers filled, only when the metric is a
+known number above zero; otherwise the whole block is removed, so the page
+never shows a made-up or a zero count. The metrics and their markers:
+
+  downloads    every download of every asset of every release of the app
+    {{metric.downloads}}        1234 (a bare number, for JSON-LD)
+    {{metric.downloads_es}}     1.234 descargas
+    {{metric.downloads_en}}     1,234 downloads
+  stars        the app repository's GitHub stars
+    {{metric.stars}}            12
+    {{metric.stars_es}}         12 estrellas
+    {{metric.stars_en}}         12 stars
+
+A metric marker outside its own block, a block left open, or an unknown
+metric fails the build like a release marker does.
 """
 
 from __future__ import annotations
@@ -77,8 +100,77 @@ MONTHS_EN = [
 ]
 
 
+# Each public metric: (singular, plural) labels in Spanish and English.
+METRICS = {
+    "downloads": (("descarga", "descargas"), ("download", "downloads")),
+    "stars": (("estrella", "estrellas"), ("star", "stars")),
+}
+METRIC_BLOCK = re.compile(
+    r"\{\{#metric\.([a-z_]+)\}\}(.*?)\{\{/metric\.\1\}\}", re.DOTALL
+)
+METRIC_MARKER = re.compile(r"\{\{\s*[#/]?\s*metric\.([^}]*?)\s*\}\}")
+METRIC_LEFTOVER = re.compile(r"\{\{\s*[#/]?\s*metric|metric\.[a-z_.0-9]*\}\}")
+
+
 class ReleaseError(Exception):
     pass
+
+
+def number_es(n: int) -> str:
+    return f"{n:,}".replace(",", ".")
+
+
+def number_en(n: int) -> str:
+    return f"{n:,}"
+
+
+def metric_values(metrics: dict) -> dict[str, dict[str, str]]:
+    """The markers of every metric worth showing: known and above zero.
+
+    A metric that is missing, null, zero, negative or not a whole number is
+    left out, and render_metrics() then removes its blocks.
+    """
+    if not isinstance(metrics, dict):
+        raise ReleaseError("the metrics are not a JSON object")
+    out: dict[str, dict[str, str]] = {}
+    for name, ((es1, es2), (en1, en2)) in METRICS.items():
+        n = metrics.get(name)
+        if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
+            continue
+        out[name] = {
+            name: str(n),
+            f"{name}_es": f"{number_es(n)} {es1 if n == 1 else es2}",
+            f"{name}_en": f"{number_en(n)} {en1 if n == 1 else en2}",
+        }
+    return out
+
+
+def render_metrics(text: str, known: dict[str, dict[str, str]], where: str) -> str:
+    """Keeps and fills the block of each known metric, removes the others."""
+
+    def block(m: re.Match) -> str:
+        name, body = m.group(1), m.group(2)
+        if name not in METRICS:
+            raise ReleaseError(f"{where}: unknown metric block {name!r}")
+        if name not in known:
+            return ""
+
+        def one(mm: re.Match) -> str:
+            key = mm.group(1)
+            if key not in known[name]:
+                raise ReleaseError(
+                    f"{where}: {mm.group(0)} inside the {name} block"
+                )
+            return known[name][key]
+
+        return METRIC_MARKER.sub(one, body)
+
+    out = METRIC_BLOCK.sub(block, text)
+    if METRIC_LEFTOVER.search(out):
+        raise ReleaseError(
+            f"{where}: a metric marker outside its block, or a block left open"
+        )
+    return out
 
 
 def mib(size: int) -> str:
@@ -180,8 +272,11 @@ def check_json(path: Path, text: str) -> None:
         raise ReleaseError(f"{path}: no longer valid JSON: {e}") from None
 
 
-def apply(release: dict, repo: str, site: Path, out: Path) -> dict[str, str]:
+def apply(
+    release: dict, repo: str, site: Path, out: Path, metrics: dict | None = None
+) -> dict[str, str]:
     vals = values(release, repo)
+    known = metric_values(metrics or {})
     if not site.is_dir():
         raise ReleaseError(f"{site} is not a folder")
     if out.exists() and any(out.iterdir()):
@@ -196,7 +291,7 @@ def apply(release: dict, repo: str, site: Path, out: Path) -> dict[str, str]:
             continue
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(out).as_posix()
-        new = render(text, vals, rel, used)
+        new = render_metrics(render(text, vals, rel, used), known, rel)
         check_json(path.relative_to(out), new)
         if new != text:
             path.write_text(new, encoding="utf-8")
@@ -204,6 +299,8 @@ def apply(release: dict, repo: str, site: Path, out: Path) -> dict[str, str]:
     unused = [f"{label}.url" for label in DOWNLOADS if f"{label}.url" not in used]
     if unused:
         raise ReleaseError(f"site/ never links {', '.join(unused)}")
+    for name, markers in known.items():
+        vals[f"metric.{name}"] = markers[name]
     return vals
 
 
@@ -213,16 +310,27 @@ def main(argv: list[str]) -> int:
     p.add_argument("--repo", required=True)
     p.add_argument("--site", required=True, type=Path)
     p.add_argument("--out", required=True, type=Path)
+    p.add_argument(
+        "--metrics-json",
+        type=Path,
+        help="public metrics to show, {\"downloads\": N, \"stars\": N}",
+    )
     a = p.parse_args(argv)
     try:
         release = json.loads(a.release_json.read_text(encoding="utf-8"))
-        vals = apply(release, a.repo, a.site, a.out)
+        metrics = None
+        if a.metrics_json is not None:
+            metrics = json.loads(a.metrics_json.read_text(encoding="utf-8"))
+        vals = apply(release, a.repo, a.site, a.out, metrics)
     except (OSError, json.JSONDecodeError, ReleaseError) as e:
         print(f"apply_release: {e}", file=sys.stderr)
         return 1
     print(f"site/ filled with {PRODUCT} {vals['version']} ({vals['date']}):")
     for label in DOWNLOADS:
         print(f"  {vals[label + '.url']} ({vals[label + '.mib_en']} MiB)")
+    for name in METRICS:
+        shown = vals.get(f"metric.{name}")
+        print(f"  {name}: {shown if shown else 'unknown or zero, not shown'}")
     return 0
 
 
