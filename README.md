@@ -37,6 +37,26 @@ is unknown or left over, a download is linked nowhere, or a JSON file or
 JSON-LD block no longer parses. There is no flag to skip any of that: the
 landing never links a file that is not there.
 
+## Public metrics
+
+The download section also says how many times the app has been downloaded
+(the `download_count` of every asset of every release, all pages of
+`GET /repos/MAECLY/pluryprint/releases`) and, next to the source link, how
+many stars the repository has. `build.py` asks the API for both at build
+time, and `{{#metric.*}}...{{/metric.*}}` blocks in `site/` hold their text.
+
+A metric is shown only when the API gives a count above zero. Zero, an error,
+a rate limit or an answer of the wrong shape removes its block, so the page
+never shows a guessed or a zero number; unlike the release, a missing metric
+fails nothing, and the build says why on stderr. A metric marker outside its
+block, a block left open or an unknown metric still fails the build. The
+offline build (`--release-json`) asks the API for nothing and shows no
+metric, unless `--metrics-json FILE` gives them
+(`{"downloads": 208, "stars": 3}`).
+
+The count is the one of the last build: a new release triggers one, so does
+any push to `main`.
+
 ## Deployment
 
 The repository is connected to Vercel through its Git integration:
