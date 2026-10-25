@@ -1,5 +1,7 @@
 # Pluryprint landing
 
+[![Stars](https://img.shields.io/github/stars/MAECLY/pluryprint-landing?style=flat-square)](https://github.com/MAECLY/pluryprint-landing/stargazers) [![Views](https://hits.sh/github.com/MAECLY/pluryprint-landing.svg?label=views&style=flat-square)](https://hits.sh/github.com/MAECLY/pluryprint-landing/) [![Last commit](https://img.shields.io/github/last-commit/MAECLY/pluryprint-landing?style=flat-square)](https://github.com/MAECLY/pluryprint-landing/commits/main)
+
 The landing page of [Pluryprint](https://pluryprint.maecly.com), the desktop
 app that prints many files at once on Windows and macOS. The app itself, its
 releases and its issues live in
